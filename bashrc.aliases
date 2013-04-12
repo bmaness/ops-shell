@@ -1,0 +1,422 @@
+#~/.bash_aliases: called by .bashrc to define aliases.
+# Version for: jgoin:ops
+
+# Custom Fields Aliases
+## Auto-fields - Auto-configure fields version and symlink it to ~/$HOME/fields (DEPRECATED)
+#if [ ! -L $HOME/fields ]
+#then
+#  ln -s /usr/local/apps/fields $HOME/fields
+#fi
+
+## Function determines what the default version is for the given stage-name and
+## changes to that fields version.
+function setupfields() {
+FIELDSVER=`$HOME/fields/trunk/fields-provision.php --show-default-version | sed s/_/\./g | cut -d. -f1,2`
+cd ~/fields/$FIELDSVER
+}
+
+## Stage aliases for various stages in Acquia Hosting
+alias adevcloud='facct devcloud; fstage devcloud; setupfields'
+alias agardens='facct gardens-prod; fstage gardens; setupfields'
+alias agardensdev='facct gardens-dev; fstage gsteamer; setupfields'
+alias aenterpriseg1='facct enterprise-g1; fstage enterprise-g1; setupfields'
+alias anetwork='facct acquia-internal; fstage network; setupfields'
+alias aprod='facct hosting-prod; fstage prod; setupfields'
+alias aumgegardens='facct umg-egardens; fstage umg-egardens; setupfields'
+alias awmgegardens='facct wmg-egardens; fstage wmg-egardens; setupfields'
+alias afpmgegardens='facct fpmg-egardens; fstage fpmg-egardens; setupfields'
+alias ajgoin='facct hosting-dev; fstage jgoin; setupfields'
+alias asearch='facct search-service; fstage search-service; setupfields'
+alias aexternal='facct external; fstage external; cd ~/fields/1.63'
+alias adsca='facct dsca; fstage dsca; cd ~/fields/1.63'
+
+
+# SITE FUNCTIONS
+# Usage: # cmd <site-name>
+
+# Site is having a lot of 404s? run this function to find them:
+function get_404_from_site()
+{
+    echo "Site $1 404 ERRORS:"
+    fpdsh -t site:$1 -n 'ded|web|srv|managed|staging|srv' -c "sudo tail -n 1000 /var/log/sites/$1/logs/*/access.log  2>/dev/null | grep ' 404 ' " 2>/dev/null  | sed -r 
+'s/.*(GET|POST|HEAD|PROPFIND) ([^\?]*?)(\?.*?)? HTTP.*/\2/' | grep -v '^/$'  | sort | uniq -c | sort -n | tail  ;
+}
+ 
+# server list - returns instances used by a site-name -or- server (must match "web-" else =~ webchick or any other erroneous site-names)
+function sl {
+site=$1;
+ if [ "`echo $site|egrep ^'(bal|dbmaster|ded|fsdb|fsdbmesh|managed|srv|staging|web)-'`" != "" ]
+  then
+  sites=(`./fields-provision.php --site-list on:$1`)
+  echo "sites = ${sites[@]}"
+  site=${sites[0]}
+ fi;
+ ./fields-provision.php --server-list site:$site --columns ami_type,ec2_id,ec2_availability_zone,has_eip,web_service_status,os,bits,external_ip,internal_ip | sort ; 
+}
+
+# server list ACTIVE ONLY- returns instances used by a site-name -or- server (must match "web-" else =~ webchick or any other erroneous site-names)
+function slactive {
+site=$1;
+ if [ "`echo $site|egrep ^'(bal|dbmaster|ded|fsdb|fsdbmesh|managed|srv|staging|web)-'`" != "" ]
+  then
+  sites=(`./fields-provision.php --site-list on:$1`)
+  echo "sites = ${sites[@]}"
+  site=${sites[0]}
+ fi;
+ ./fields-provision.php --server-list site:$site --columns ami_type,ec2_id,ec2_availability_zone,has_eip,web_service_status,os,bits,external_ip,internal_ip --running | sort ; 
+}
+
+# EASILY get stats for a site
+function check_site() {
+  curl "$1.$FIELDS_STAGE.acquia-sites.com/ACQUIA_MONITOR?site=$1&connect=1";
+}
+
+# Check what IPs are for a particular sitename's domains
+function check_domains() {
+  for i in `./fields-provision.php --site-info $1 | grep domain | awk {'print $2'}`; do echo '-----'; echo $i; host $i; done;
+}
+
+function getsitestatus () {
+  curl $1.prod.acquia-sites.com/ACQUIA_MONITOR?site=$1\&connect=1 --head -H "Cookie: NO_CACHE=1" -L;
+}
+ 
+# Get load averages across a site (1/5/15min)
+function getload() {
+ fpdsh -t site:$1 -c uptime | sort ;
+}
+
+# run this against a site to decipher the active master.
+function getactivedb() { sl $1 && echo;
+ web=`./fields-provision.php --server-list site:$1 --running | sort -r | egrep -m 1 'web|managed|ded'`;
+ echo "testing $web";
+ cid=`fssh $web "sudo ls -1 /mnt/dns_keys | grep key | cut -d. -f1"`;
+ for key in $cid; do echo -e "clusterid = $key\nactivedb = `fssh $web "dig @127.0.0.1 -t CNAME $key.mysql. +short"|sed s/\.$//`\n"; done; }
+ 
+# remount gluster on all site instances - one at a time incase of issues..
+function fsremount {
+  ./tools/misc/fpdsh -t site:$1 -n 'fsdb|fs|web|ded|managed|staging' -c "sudo -H /bin/bash -c 'umount /mnt/gfs || lsof|grep /mnt/gfs; sleep 2; umount -f /mnt/gfs; rm /etc/glusterfs/glusterfs-client.vol ; fields-config-fs-client.php'";
+}
+
+# remount gluster on a single server
+function fsremountserver {
+  fssh $1 "sudo -H /bin/bash -c 'umount /mnt/gfs || lsof|grep /mnt/gfs; sleep 2; umount -f /mnt/gfs; rm /etc/glusterfs/glusterfs-client.vol ; fields-config-fs-client.php'";
+}
+ 
+# forcibly remount gluster on all site instances
+function forcefsremount {
+  ./tools/misc/fpdsh -t site:$1 -p1 -n 'fsdb|fs|web|ded|managed' -c "sudo -H /bin/bash -c '/etc/init.d/apache2 stop ; sleep 2 ; pkill -9 apache2 ; pkill -9 php-cgi; /etc/init.d/glusterfs-server stop ; pkill -9 glusterfs ; sleep 2 ; umount -f /mnt/gfs ; sleep 2 ; umount -f /mnt/gfs ; rm /etc/glusterfs/glusterfs-client.vol ; /etc/init.d/glusterfs-server start; fields-config-fs-server.php ; fields-config-fs-client.php ; /etc/init.d/apache2 start'";
+}
+
+# forcibly remount gluster on a single server 
+function forcefsremountserver {
+  fssh $1 "sudo -H /bin/bash -c '/etc/init.d/apache2 stop ; sleep 2 ; pkill -9 apache2 ; pkill -9 php-cgi; /etc/init.d/glusterfs-server stop ; pkill -9 glusterfs ; sleep 2 ; umount -f /mnt/gfs ; sleep 2 ; umount -f /mnt/gfs ; rm /etc/glusterfs/glusterfs-client.vol ; /etc/init.d/glusterfs-server start; fields-config-fs-server.php ; fields-config-fs-client.php ; /etc/init.d/apache2 start'";
+}
+
+# forcibly remount gluster on web instances
+function webforcefsremount {
+  ./tools/misc/fpdsh -t site:$1 -p1 -n 'web' -c "sudo -H /bin/bash -c '/etc/init.d/apache2 stop ; sleep 2 ; pkill -9 apache2 ; pkill -9 php-cgi ; 
+/etc/init.d/glusterfs-server stop ; pkill -9 glusterfs ; sleep 2 ; umount -f /mnt/gfs ; sleep 2 ; umount -f /mnt/gfs ; rm /etc/glusterfs/glusterfs-client.vol ; /etc/init.d/glusterfs-server start ; 
+fields-config-fs-server.php ; fields-config-fs-client.php ; /etc/init.d/apache2 start'";
+}
+ 
+# fields-config-bal
+function fcb {
+  ./tools/misc/fpdsh -t site:$1 -n 'bal' -c 'sudo fields-config-bal.php';
+}
+ 
+# fields-config-web.php
+function fcw {
+  ./tools/misc/fpdsh -t site:$1 -n 'web|ded|srv|staging' -c 'sudo fields-config-web.php';
+}
+ 
+# turn it on and reconfig the bal
+function webenable() {
+  ./fields-provision.php --server-edit $1 --set web_service_status=2; fcb `cl $1 |head -n1`;
+}
+ 
+# turn it off and reconfig the bal
+function webdisable() {
+  ./fields-provision.php --server-edit $1 --set web_service_status=1; fcb `cl $1 |head -n1`;
+}
+ 
+# restart tungsten services
+function tungstenrestart () {
+ for i in `./fields-provision.php --server-list site:sharek | grep "fsdb\|fsdbmesh"`;
+  do echo $i; echo "-----"; fssh $i "sudo -H /bin/bash -c '/etc/init.d/stunnel4 restart && /etc/init.d/treplicator restart'"; echo;
+ done;
+}
+
+# restart tungsten services on a single server
+function tungstenrestartsingle () {
+  fssh $1 "sudo -H /bin/bash -c '/etc/init.d/stunnel4 restart && /etc/init.d/treplicator restart'";
+}
+
+# check tungsten replication across all servers in a site
+function check_tungsten () {
+ for i in `./fields-provision.php --server-list site:$1 | grep "fsdb\|fsdbmesh"`;
+  do echo $i; echo "-----"; fssh $i "sudo -H /bin/bash -c '/usr/local/tungsten-replicator/current/tungsten-replicator/bin/trepctl services'"; echo;
+ done;
+}
+
+# resync all tungsten nodes across a given site name
+function tungstenresync () {
+ for i in `./fields-provision.php --server-list site:$1 | grep "fsdb\|fsdbmesh"`;
+  do echo $i; echo "-----"; fssh $i "sudo -H /bin/bash -c '/usr/local/sbin/tungsten-slave-resync'"; echo;
+ done;
+}
+
+# INSTANCE FUNCTIONS
+#
+# Usage: # cmd ded-1234
+ 
+# ssh alias
+fssh() {
+  FHOST=$1; shift; ssh -p 40506 -i $FIELDS_SSH_ID -o StrictHostKeyChecking=no $USER@`fqual $FHOST` $@;
+}
+
+# ssh alias with EXPLICIT agent forwarding
+fssha () {
+  FHOST=$1; shift; ssh -p 40506 -i $FIELDS_SSH_ID -o StrictHostKeyChecking=no $USER@`fqual $FHOST` $@ -A;
+}
+
+# ssh VERBOSE alias 
+fsshverbose() {
+  FHOST=$1; shift; ssh -vvv -p 40506 -i $FIELDS_SSH_ID -o StrictHostKeyChecking=no $USER@`fqual $FHOST` $@;
+}
+
+# client list - returns clients on an instance
+function cl {
+  ./fields-provision.php --site-list on:$1 | sort ;
+}
+ 
+# server info
+function si {
+  ./fields-provision.php --server-info $1 ;
+}
+ 
+# instance status
+function is {
+  ec2-describe-instance-status --region `./fields-provision.php --server-list $1 --columns ec2_region | cut -d' ' -f2`  `./fields-provision.php --server-list $1 --columns ec2_id | cut 
+-d' ' -f2`;
+}
+ 
+# console output
+function co {
+  ec2-get-console-output `./fields-provision.php --server-list $1 --columns ec2_id | cut -d' ' -f2`;
+}
+ 
+# get server volumes and enc keys
+function volumes() {
+  ./fields-provision.php --server-info $1 | egrep '^ec2_availability_zone|volumes\..*ebs_id|volumes\..*device|volumes\..*size|volumes.*enckey|ami_type|volumes\..*mountpoint' ;
+}
+ 
+# mysql-slave-resync.pl
+function myresync() {
+  fssh $1 "sudo mysql-slave-resync.pl";
+}
+ 
+# check the status of instance volumes
+function volstat {
+  for vol in `si $1 |grep "vol-"|grep volumes|awk '{print $2}'`; do ec2-describe-volume-status $vol; done;
+}
+ 
+# as the function name says
+function check_dbcount() {
+  fssh $1 "/usr/bin/mysql -B --disable-column-names -e'show databases'" | wc -l;
+}
+ 
+# quick reboot
+function fields_reboot() {
+  ./fields-provision.php --REBOOT-PRODUCTION-SERVERS --reboot $1;
+}
+ 
+# suspend
+function fields_suspend() {
+  ./fields-provision.php --SUSPEND-PRODUCTION-SERVERS --suspend $1;
+}
+ 
+# launch
+function launch {
+  ./fields-provision.php --launcher --server $1 --parallel;
+}
+ 
+# standard relaunch
+function relaunch {
+  ./fields-provision.php --suspend $1 --SUSPEND-PRODUCTION-SERVERS && ./fields-provision.php --launcher --server $1;
+}
+ 
+# abandon based relaunch
+function arelaunch {
+  ./fields-provision.php --suspend $1 --SUSPEND-PRODUCTION-SERVERS --abandon && ./fields-provision.php --launcher --server $1;
+}
+
+# disable monitoring
+function mondisable {
+  ./fields-provision.php --server-edit $1 --set monitoring_status=1;
+}
+
+# enable monitoring
+function monenable {
+  ./fields-provision.php --server-edit $1 --set monitoring_status=2;
+}
+ 
+ 
+ 
+# MISC FUNCTIONS
+#
+ 
+function shelljoin {
+  echo $@ | xargs -n1 -I{} echo -n "{}," | sed '$s/.$//';
+}
+ 
+function gh {
+  grep -i "$1" ~/.bash_history;
+}
+ 
+function fo {
+  ./fields-provision.php --failover-elastic-ip $1;
+}
+ 
+function mq {
+  fssh master 'sudo -H mysql fields_master -e "$@"';
+}
+ 
+function ec2_id {
+  fssh master "sudo mysql fields_master -e \"select name from acquia_fields_server where ec2_id = '$1'\"";
+}
+ 
+function fcpadb {
+  ./tools/misc/fpdsh -t dns-% -c 'sudo fields-compare-primary-active-db.php';
+}
+ 
+# regen own netrc
+function netrc {
+  fssh master 'sudo ah-get-rpc-password $USER' > $NETRC.dynamic;
+}
+function getnetrc {
+  grep -A 2 $1 $NETRC | grep $2 | cut -d' ' -f 2;
+}
+ 
+function seteucaenv {
+export EC2_ACCESS_KEY=$(getnetrc ec2.client login)
+export EC2_SECRET_KEY=$(getnetrc ec2.client password)
+export EC2_URL=https://us-east-1.ec2.amazonaws.com
+}
+ 
+function DefaultMax {
+  ./fields-provision.php --set-server-config $1:fcgi.conf:DefaultMaxClassProcessCount:$2;
+}
+ 
+function Memcached {
+  ./fields-provision.php --set-server-config $1:memcached.conf:-m:$2;
+}
+ 
+function Max {
+  ./fields-provision.php --set-server-config $1:fcgi.conf:MaxProcessCount:$2;
+}
+
+function clearsshknownhosts () {
+  echo "" > ~/.ssh/known_hosts
+}
+
+function check_http_code() {
+  curl -sL -w "%{http_code} %{url_effective}\\n" "$1" -o /dev/null;
+}
+
+function awschk() {
+  if [ -z $FIELDS ]; then FIELDS=`pwd`; fi
+  SITES=$(${FIELDS}/fields-provision.php --site-list on:$1 | tr '\n' ',')
+  echo -e "Sites: \e[1;33m${SITES}\e[00m"
+  fssh $1 'if [ $(cat /mnt/brick*/.fs_sentinel.log) ]; then echo -e "\e[1;32mVolume - OK\e[00m"; else echo -e "\e[1;31mERROR: Volume - BAD\e[00m"; exit 1 ; fi'
+  fssh $1 'if [ $(pgrep glusterfsd) ]; then echo -e "\e[1;32mGluster Server - OK\e[00m"; else echo -e "\e[1;31mERROR: Gluster Server - BAD\e[00m"; exit 1; fi'
+  fssh $1 'sudo mysql-slave-resync.pl lolcats ; if [ $? -ne 0 ]; then echo -e "\e[1;31mERROR: MySQL - BAD\e[00m" ; exit 1 ; else echo -e "\e[1;32mMySQL - OK\e[00m"; fi'
+  echo -en "Press Enter to Proceed w/ UNfencing (Ctrl+C to abort) "
+  read
+  TASK=$(${FIELDS}/bin/ah-filesystem unfail -s $1 | tr -d '"')
+  sleep 10
+  ${FIELDS}/fields-provision.php --task-get ${TASK}
+  fssh $1 'sudo iptables -L'
+}
+
+function checkSrvs {
+  site=$1; serv=$2; for srv in `./fields-provision.php --server-list site:$site --where type=$serv --running`; do echo -ne "$srv : "; curl -I -N $srv.$FIELDS_STAGE.hosting.acquia.com -H "Host: $site.$FIELDS_STAGE.acquia-sites.com" 2>/dev/null | grep HTTP; done
+}
+
+function checkgardensdbs () {
+for db in `./fields-provision.php --server-list dbmaster-% --running`;
+do
+  id=`echo $db|sed 's/\-/ /'|awk '{print $2}'`
+  if (( $id % 2 == 0 ))
+  then
+    echo -e -n "$db: ";
+    fssh $db 'sudo find /var/lib/mysql/ -maxdepth 1 -type d | wc -l';
+  fi
+done;
+}
+
+function getonetimeadminmasterlogin() {
+        fssh master 'sudo cd /var/www/html/fields-master && drush uli' ;
+}
+
+function getfailedoverdbs () {
+for i in `./fields-provision.php --server-list dns%`; 
+        do echo "* $i";
+        fssh $i 'sudo ah-list-failed-over-dbs'; 
+        done;
+}
+
+function getwebrotationstatus () {
+        ./fields-provision.php --site-info $1 | awk -F": " '{ if ( $0 ~ "web_servers" ) { if ( $0 ~ "name:" ) { name=$2; new++; }; if ( $0 ~ "site_server_status:" ) { statusid=$2; new++; }; if ( new == 2 ) { printf "%s is in status %s\n",name,statusid; new=0; }; }; }';
+}
+
+function gettanglestatus {
+        for tid in `seq 1 8`; do  echo "Tangle 00$tid:"; echo "------------------------------------------------"; echo "| Host:         | Instance   | SSW       | WSS |"; echo "------------------------------------------------"; ./fields-provision.php --site-info tangle00$tid | awk -F": " '{  if ( $0 ~ "web_servers" ) {  if ( $0 !~ "cron" ) {  if ( $0 ~ "name:" ) {  name=$2; new++; };  if ( $0 ~ "web_service_status" ) { if ( $2 ~ "2" ) { webstatus="Yes" }; if ( $2 ~ "1" ) { webstatus="No" }; new++; }; if ( $0 ~ "ec2_id" ) { if ( $0 !~ "vpc" ) { ec2=$2; new++; }; }; if ( $0 ~ "site_server_status:" ) {  statusid=$2;  if ( statusid == "1000" ) {  status="Active";  };  if ( statusid == "1001" ) {  status="Inactive"; };  if ( statusid == "1002" ) { status="Deploy"; }; new++; }; if ( new == 4 ) { if ( statusid ~ "1001" ) { webstatus=""; }; printf "| %-13s | %-10s |  %-8s | %-3s |\n",name,ec2,status,webstatus; new=0; }; }; }; }'; echo "------------------------------------------------"; done;
+}
+
+function gettangleslowlogs () {
+        for i in `./fields-provision.php --server-list site:$1 --where type=dbmaster`;
+                do fssh $i "sudo cat /var/lib/mysql/$i-slow.log" >> ~/$i-slow.log_$(date +%Y%m%d);
+                scp jgoin@$i.gardens.hosting.acquia.com:~/$i-slow.log_$(date +%Y%m%d) ~/$1/$i-slow.log_$(date +%Y%m%d);
+        done
+}
+
+function fping () {
+        /usr/bin/fping -l $1.$FIELDS_STAGE.hosting.acquia.com
+}
+
+function getserverstatus () {
+instance=$1
+ if [ "`echo $instance|egrep ^'(bal|dbmaster|ded|fsdb|fsdbmesh|managed|srv|staging|web|svn|javarsv|javaephem)-'`" != "" ]
+  then
+   echo "Instance ID: `./fields-provision.php --server-info $instance | grep ^ec2_id | awk '{print $2}' | uniq`";
+   echo -e "Instance Region: `./fields-provision.php --server-info $instance | grep ^ec2_region | awk '{print $2}'`";
+   echo -e "Instance Availability Zone: `./fields-provision.php --server-info $instance | grep ec2_availability_zone | awk '{print $2}' | uniq`";
+   echo -e "Server Name: $instance";
+   echo -e "Subscription Tag(s): `./fields-provision.php --server-info $instance | grep subscription_tag | awk '{print $2}' | uniq`\n";
+   echo -e "Site List \n---\n`./fields-provision.php --site-list on:$instance`\n";
+   echo -e "AWS Status Information \n---";
+   ec2-describe-instance-status `./fields-provision.php --server-info $instance | grep ^ec2_id | awk '{print $2}' | uniq` --region `./fields-provision.php --server-info $instance | grep ^ec2_region | awk '{print $2}' | uniq`;
+ else
+  for i in `./fields-provision.php --server-list % --where ec2_id=$instance`;
+  do
+   echo "Instance ID: $instance";
+   echo -e "Instance Region: `./fields-provision.php --server-info $i | grep ^ec2_region | awk '{print $2}'`";
+   echo -e "Instance Availability Zone: `./fields-provision.php --server-info $i | grep ec2_availability_zone | awk '{print $2}' | uniq`";
+   echo -e "Server Name: $i";
+   echo -e "Subscription Tag(s): `./fields-provision.php --server-info $i | grep subscription_tag | awk '{print $2}' | uniq`\n";
+   echo -e "Site List \n---\n`./fields-provision.php --site-list on:$i`\n";
+   echo -e "AWS Status Information \n---";
+   ec2-describe-instance-status $instance --region `./fields-provision.php --server-info $i | grep ^ec2_region | awk '{print $2}' | uniq`;
+  done;  
+ fi;
+}
+
+# SSL Aliases
+function sslmodulus () {
+ echo "Cert: ~/ssl/certs/$1.pem"
+ openssl x509 -noout -modulus -in ~/ssl/certs/$1.pem | openssl md5;
+ echo "Key: ~/ssl/keys/$1.key"
+ openssl rsa -noout -modulus -in ~/ssl/keys/$1.key | openssl md5;
+ echo "CSR: ~/ssl/csr/$1.csr"
+ openssl req -noout -modulus -in ~/ssl/csr/$1.csr | openssl md5;
+}
