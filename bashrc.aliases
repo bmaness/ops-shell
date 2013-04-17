@@ -391,6 +391,7 @@ instance=$1
    echo "Instance ID: `./fields-provision.php --server-info $instance | grep ^ec2_id | awk '{print $2}' | uniq`";
    echo -e "Instance Region: `./fields-provision.php --server-info $instance | grep ^ec2_region | awk '{print $2}'`";
    echo -e "Instance Availability Zone: `./fields-provision.php --server-info $instance | grep ec2_availability_zone | awk '{print $2}' | uniq`";
+   echo -e "Instance AMI Type: `./fields-provision.php --server-info $instance | grep ami_type | awk '{print $2}'`";
    echo -e "Server Name: $instance";
    echo -e "Subscription Tag(s): `./fields-provision.php --server-info $instance | grep subscription_tag | awk '{print $2}' | uniq`\n";
    echo -e "Site List \n---\n`./fields-provision.php --site-list on:$instance`\n";
@@ -402,6 +403,7 @@ instance=$1
    echo "Instance ID: $instance";
    echo -e "Instance Region: `./fields-provision.php --server-info $i | grep ^ec2_region | awk '{print $2}'`";
    echo -e "Instance Availability Zone: `./fields-provision.php --server-info $i | grep ec2_availability_zone | awk '{print $2}' | uniq`";
+   echo -e "Instance AMI Type: `./fields-provision.php --server-info $instance | grep ami_type | awk '{print $2}'`";
    echo -e "Server Name: $i";
    echo -e "Subscription Tag(s): `./fields-provision.php --server-info $i | grep subscription_tag | awk '{print $2}' | uniq`\n";
    echo -e "Site List \n---\n`./fields-provision.php --site-list on:$i`\n";
