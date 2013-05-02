@@ -95,6 +95,11 @@ function slactive() {
  ./fields-provision.php --server-list site:$site --columns ami_type,ec2_id,ec2_availability_zone,has_eip,web_service_status,os,bits,external_ip,internal_ip --running | sort ; 
 }
 
+# client list - returns clients on an instance
+function cl {
+  ./fields-provision.php --site-list on:$1 | sort ;
+}
+ 
 # Standard EIP failover
 function fo {
   ./fields-provision.php --failover-elastic-ip $1;
@@ -319,13 +324,13 @@ function server-mon-enable() {
 }
 
 # turn it on and reconfig the bal
-function server-webenable() {
-  ./fields-provision.php --server-edit $1 --set web_service_status=2; fcb `cl $1 |head -n1`;
+function server-web-enable() {
+  ./fields-provision.php --server-edit $1 --set web_service_status=2; site-fcb `cl $1 |head -n1`;
 }
  
 # turn it off and reconfig the bal
-function server-webdisable() {
-  ./fields-provision.php --server-edit $1 --set web_service_status=1; fcb `cl $1 |head -n1`;
+function server-web-disable() {
+  ./fields-provision.php --server-edit $1 --set web_service_status=1; site-fcb `cl $1 |head -n1`;
 }
 
 function server-set-fcgi-default-max() {
@@ -338,6 +343,39 @@ function server-set-memcached() {
  
 function server-set-fcgi-max() {
  ./fields-provision.php --set-server-config $1:fcgi.conf:MaxProcessCount:$2;
+}
+
+function server-get-status() {
+instance=$1
+ if [ "`echo $instance|egrep ^'(bal|dbmaster|ded|fsdb|fsdbmesh|managed|srv|staging|web|svn|javarsv|javaephem|dns|fs)-'`" != "" ]
+  then
+   echo "Instance ID: `./fields-provision.php --server-info $instance | grep ^ec2_id | awk '{print $2}' | uniq`";
+   echo -e "Instance Region: `./fields-provision.php --server-info $instance | grep ^ec2_region | awk '{print $2}'`";
+   echo -e "Instance Availability Zone: `./fields-provision.php --server-info $instance | grep ec2_availability_zone | awk '{print $2}' | uniq`";
+   echo -e "Instance AMI Type: `./fields-provision.php --server-info $instance | grep ami_type | awk '{print $2}'`";
+   echo -e "Server Name: $instance";
+   echo -n "Launched: "; date -d @`./fields-provision.php --server-info $instance | grep launched | awk {'print $2'}`;
+   echo -e "Number of sites: `./fields-provision.php --site-list on:$instance | wc -l`"
+   echo -e "Subscription Tag(s): `./fields-provision.php --server-info $instance | grep subscription_tag | awk '{print $2}' | uniq`\n";
+   echo -e "Site List \n---\n`./fields-provision.php --site-list on:$instance`\n";
+   echo -e "AWS Status Information \n---";
+   ec2-describe-instance-status `./fields-provision.php --server-info $instance | grep ^ec2_id | awk '{print $2}' | uniq` --region `./fields-provision.php --server-info $instance | grep ^ec2_region | awk '{print $2}' | uniq`;
+ else
+  for i in `./fields-provision.php --server-list % --where ec2_id=$instance`;
+  do
+   echo "Instance ID: $instance";
+   echo -e "Instance Region: `./fields-provision.php --server-info $i | grep ^ec2_region | awk '{print $2}'`";
+   echo -e "Instance Availability Zone: `./fields-provision.php --server-info $i | grep ec2_availability_zone | awk '{print $2}' | uniq`";
+   echo -e "Instance AMI Type: `./fields-provision.php --server-info $instance | grep ami_type | awk '{print $2}'`";
+   echo -e "Server Name: $i";
+   echo -n "Launched: "; date -d @`./fields-provision.php --server-info $i | grep launched | awk {'print $2'}`;
+   echo -e "Number of sites: `./fields-provision.php --site-list on:$instance | wc -l`"
+   echo -e "Subscription Tag(s): `./fields-provision.php --server-info $i | grep subscription_tag | awk '{print $2}' | uniq`\n";
+   echo -e "Site List \n---\n`./fields-provision.php --site-list on:$i`\n";
+   echo -e "AWS Status Information \n---";
+   ec2-describe-instance-status $instance --region `./fields-provision.php --server-info $i | grep ^ec2_region | awk '{print $2}' | uniq`;
+  done;  
+ fi;
 }
 
 # MISC functions
@@ -390,35 +428,6 @@ function misc-gardens-get-tangle-slow-logs() {
     do fssh $i "sudo cat /var/lib/mysql/$i-slow.log" >> ~/$i-slow.log_$(date +%Y%m%d);
     scp jgoin@$i.gardens.hosting.acquia.com:~/$i-slow.log_$(date +%Y%m%d) ~/$1/$i-slow.log_$(date +%Y%m%d);
   done
-}
-
-function misc-get-server-status() {
-instance=$1
- if [ "`echo $instance|egrep ^'(bal|dbmaster|ded|fsdb|fsdbmesh|managed|srv|staging|web|svn|javarsv|javaephem)-'`" != "" ]
-  then
-   echo "Instance ID: `./fields-provision.php --server-info $instance | grep ^ec2_id | awk '{print $2}' | uniq`";
-   echo -e "Instance Region: `./fields-provision.php --server-info $instance | grep ^ec2_region | awk '{print $2}'`";
-   echo -e "Instance Availability Zone: `./fields-provision.php --server-info $instance | grep ec2_availability_zone | awk '{print $2}' | uniq`";
-   echo -e "Instance AMI Type: `./fields-provision.php --server-info $instance | grep ami_type | awk '{print $2}'`";
-   echo -e "Server Name: $instance";
-   echo -e "Subscription Tag(s): `./fields-provision.php --server-info $instance | grep subscription_tag | awk '{print $2}' | uniq`\n";
-   echo -e "Site List \n---\n`./fields-provision.php --site-list on:$instance`\n";
-   echo -e "AWS Status Information \n---";
-   ec2-describe-instance-status `./fields-provision.php --server-info $instance | grep ^ec2_id | awk '{print $2}' | uniq` --region `./fields-provision.php --server-info $instance | grep ^ec2_region | awk '{print $2}' | uniq`;
- else
-  for i in `./fields-provision.php --server-list % --where ec2_id=$instance`;
-  do
-   echo "Instance ID: $instance";
-   echo -e "Instance Region: `./fields-provision.php --server-info $i | grep ^ec2_region | awk '{print $2}'`";
-   echo -e "Instance Availability Zone: `./fields-provision.php --server-info $i | grep ec2_availability_zone | awk '{print $2}' | uniq`";
-   echo -e "Instance AMI Type: `./fields-provision.php --server-info $instance | grep ami_type | awk '{print $2}'`";
-   echo -e "Server Name: $i";
-   echo -e "Subscription Tag(s): `./fields-provision.php --server-info $i | grep subscription_tag | awk '{print $2}' | uniq`\n";
-   echo -e "Site List \n---\n`./fields-provision.php --site-list on:$i`\n";
-   echo -e "AWS Status Information \n---";
-   ec2-describe-instance-status $instance --region `./fields-provision.php --server-info $i | grep ^ec2_region | awk '{print $2}' | uniq`;
-  done;  
- fi;
 }
 
 #function awschk() {
