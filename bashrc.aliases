@@ -27,6 +27,7 @@ alias afpmgegardens='facct fpmg-egardens; fstage fpmg-egardens; setupfields'
 alias asearch='facct search-service; fstage search-service; setupfields'
 alias aexternal='facct external; fstage external; cd ~/fields/1.63'
 alias adsca='facct dsca; fstage dsca; cd ~/fields/1.63'
+alias ajgoin='facct hosting-dev; fstage jgoin; setupfields'
 
 # GENERAL FUNCTIONS
 #
@@ -52,7 +53,7 @@ function fping() {
 }
 
 # SSL comparison function
-## This function assumes that you keep your SSL stuff in the following directories for deployment and utilization
+## This function assumes that you keep your SSL data in the following directories for deployment and utilization
 ### Certs: ~/ssl/certs/
 ### Keys: ~/ssl/keys/
 ### CSRs: ~/ssl/csr/
@@ -190,7 +191,12 @@ function site-get-active-db() { sl $1 && echo;
  for key in $cid;
   do echo -e "clusterid = $key\nactivedb = `fssh $web "dig @127.0.0.1 -t CNAME $key.mysql. +short"|sed s/\.$//`\n";
  done; }
- 
+
+# get the last 10 tasks for a given site
+function site-get-last-tasks() {
+  ./fields-provision.php --task-list $1 | tail;
+}
+
 # remount gluster on all site instances - one at a time incase of issues..
 function site-fs-remount() {
   ./tools/misc/fpdsh -t site:$1 -n 'fsdb|fs|web|ded|managed|staging' -c "sudo -H /bin/bash -c 'umount /mnt/gfs || lsof|grep /mnt/gfs; sleep 2; umount -f /mnt/gfs; rm /etc/glusterfs/glusterfs-client.vol ; fields-config-fs-client.php'";
@@ -203,9 +209,8 @@ function site-fs-remount-force() {
 
 # forcibly remount gluster on web instances
 function site-fs-remount-force-webs() {
-  ./tools/misc/fpdsh -t site:$1 -p1 -n 'web' -c "sudo -H /bin/bash -c '/etc/init.d/apache2 stop ; sleep 2 ; pkill -9 apache2 ; pkill -9 php-cgi ; 
-/etc/init.d/glusterfs-server stop ; pkill -9 glusterfs ; sleep 2 ; umount -f /mnt/gfs ; sleep 2 ; umount -f /mnt/gfs ; rm /etc/glusterfs/glusterfs-client.vol ; /etc/init.d/glusterfs-server start ; 
-fields-config-fs-server.php ; fields-config-fs-client.php ; /etc/init.d/apache2 start'";
+  ./tools/misc/fpdsh -t site:$1 -p1 -n 'web|managed' -c "sudo -H /bin/bash -c '/etc/init.d/apache2 stop ; sleep 2 ; pkill -9 apache2 ; pkill -9 php-cgi ; 
+/etc/init.d/glusterfs-server stop ; pkill -9 glusterfs ; sleep 2 ; umount -f /mnt/gfs ; sleep 2 ; umount -f /mnt/gfs ; rm /etc/glusterfs/glusterfs-client.vol ; fields-config-hosts.php; /etc/init.d/glusterfs-server start; fields-config-fs-client.php ; /etc/init.d/apache2 start'";
 }
  
 # fields-config-bal
@@ -280,14 +285,23 @@ function server-mysql-resync() {
  
 # check the status of instance volumes
 function server-volume-status() {
-  for vol in `si $1 |grep "vol-"|grep volumes|awk '{print $2}'`; do ec2-describe-volume-status $vol; done;
+  for vol in `si $1 |grep "vol-"|grep volumes|awk '{print $2}'`;
+    do ec2-describe-volume-status $vol;
+  done;
 }
  
 # as the function name says
 function server-get-dbcount() {
   fssh $1 "/usr/bin/mysql -B --disable-column-names -e'show databases'" | wc -l;
 }
- 
+
+# get the last 10 tasks for all sites on that server\
+function server-get-last-tasks() {
+for SITENAME in $(./fields-provision.php --site-list on:$1 list |egrep -v 'dev$|test$');
+  do ./fields-provision.php --task-list $SITENAME | tail;
+done;
+}
+
 # quick reboot
 function server-fields-reboot() {
   ./fields-provision.php --REBOOT-PRODUCTION-SERVERS --reboot $1;
